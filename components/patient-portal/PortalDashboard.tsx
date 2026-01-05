@@ -1,0 +1,208 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { Calendar, FileText, User } from 'lucide-react';
+import { format } from 'date-fns';
+import { hu } from 'date-fns/locale';
+import { useToast } from '@/contexts/ToastContext';
+import { Patient, Appointment } from '@/lib/types';
+import { getPatient, getAppointmentsByPatient } from '@/lib/storage';
+import { getPatientPortalSession, verifyPatientPortalSession } from '@/lib/auth';
+import { PatientProfileView } from './PatientProfileView';
+
+export function PortalDashboard() {
+  const { showToast } = useToast();
+  const [loading, setLoading] = useState(true);
+  const [patient, setPatient] = useState<Patient | null>(null);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const sessionId = getPatientPortalSession();
+        if (!sessionId) {
+          window.location.href = '/patient-portal';
+          return;
+        }
+
+        const session = await verifyPatientPortalSession(sessionId);
+        if (!session) {
+          window.location.href = '/patient-portal';
+          return;
+        }
+
+        const [patientData, appointmentsData] = await Promise.all([
+          getPatient(session.patientId),
+          getAppointmentsByPatient(session.patientId),
+        ]);
+
+        setPatient(patientData);
+        setAppointments(appointmentsData || []);
+      } catch (error) {
+        console.error('Error fetching dashboard data:', error);
+        showToast('Hiba történt az adatok betöltésekor', 'error');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [showToast]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-medical-primary"></div>
+        <span className="ml-3 text-gray-600">Betöltés...</span>
+      </div>
+    );
+  }
+
+  // Get upcoming appointments (next 3)
+  const now = new Date();
+  const upcomingAppointments = appointments
+    .filter((apt) => {
+      const startTime = new Date(apt.startTime);
+      return startTime >= now && apt.approvalStatus !== 'rejected';
+    })
+    .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+    .slice(0, 3);
+
+  return (
+    <div className="space-y-6">
+      {/* Welcome */}
+      <div>
+        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">
+          Üdvözöljük, {patient?.nev || 'Páciens'}!
+        </h1>
+        <p className="text-gray-600 mt-2">
+          Itt találhatja az időpontjait, dokumentumait és egyéb információit.
+        </p>
+      </div>
+
+      {/* Quick Stats */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-blue-50 rounded-lg">
+              <Calendar className="w-6 h-6 text-blue-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Következő időpontok</p>
+              <p className="text-2xl font-bold text-gray-900">
+                {upcomingAppointments.length}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-green-50 rounded-lg">
+              <FileText className="w-6 h-6 text-green-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Összes időpont</p>
+              <p className="text-2xl font-bold text-gray-900">
+                {appointments.length}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-purple-50 rounded-lg">
+              <User className="w-6 h-6 text-purple-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">TAJ szám</p>
+              <p className="text-lg font-bold text-gray-900">
+                {patient?.taj || '-'}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Patient Profile */}
+      {patient && <PatientProfileView patient={patient} />}
+
+      {/* Upcoming Appointments */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Calendar className="w-5 h-5 text-medical-primary" />
+            Következő időpontok
+          </h2>
+          <a
+            href="/patient-portal/appointments"
+            className="text-sm text-medical-primary hover:underline"
+          >
+            Összes megtekintése
+          </a>
+        </div>
+
+        {upcomingAppointments.length === 0 ? (
+          <div className="text-center py-8 text-gray-500">
+            <Calendar className="w-12 h-12 mx-auto mb-2 text-gray-300" />
+            <p className="text-sm">Nincsenek közelgő időpontok</p>
+            <a
+              href="/patient-portal/appointments"
+              className="btn-primary mt-4 inline-flex items-center gap-2"
+            >
+              <Calendar className="w-4 h-4" />
+              Új időpont foglalása
+            </a>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {upcomingAppointments.map((appointment) => {
+              const startTime = new Date(appointment.startTime);
+              const isPending = appointment.approvalStatus === 'pending';
+
+              return (
+                <div
+                  key={appointment.id}
+                  className={`p-4 rounded-lg border ${
+                    isPending
+                      ? 'border-orange-200 bg-orange-50'
+                      : 'border-gray-200 bg-gray-50'
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Calendar className="w-4 h-4 text-gray-500" />
+                        <span className="font-semibold text-gray-900">
+                          {format(startTime, 'yyyy. MMMM d. HH:mm', { locale: hu })}
+                        </span>
+                        {isPending && (
+                          <span className="text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded">
+                            Jóváhagyásra vár
+                          </span>
+                        )}
+                      </div>
+                      {appointment.dentistName && (
+                        <p className="text-sm text-gray-600">
+                          Orvos: {appointment.dentistName}
+                        </p>
+                      )}
+                      {appointment.cim && (
+                        <p className="text-sm text-gray-600">
+                          {appointment.cim}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
